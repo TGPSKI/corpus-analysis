@@ -64,7 +64,10 @@ time window, and keep output under an ignored local directory. See
 Drift is an input failure, not a low-count result. Preserve the failing source
 and the adapter name, then inspect the vendor format before changing the
 adapter. `stats` may also report structural diagnostics such as ambiguous
-branches, duplicate ids, skipped media, or malformed records. Diagnostics are
+branches, duplicate ids, skipped media, or malformed records. An object with
+no keys at all (an empty `{}` in a conversation array) is not drift: the
+ChatGPT adapter counts it as `empty_conversation_objects` entries and reads the
+rest of the shard. Diagnostics are
 aggregate categories; they must not echo source values.
 
 The adapter boundary is also the downstream contract. A consumer such as

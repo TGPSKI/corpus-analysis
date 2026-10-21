@@ -310,6 +310,45 @@ class TestChatGPT(unittest.TestCase):
         with self.assertRaises(SchemaDrift):
             chatgpt.probe(ref)
 
+    def test_an_empty_conversation_object_is_counted_not_fatal(self):
+        """A keyless `{}` in a shard must not make the whole root unreadable.
+
+        The export format hands the adapter whatever the vendor put in the
+        array; an object with no keys at all carries nothing to drift from, so
+        it is counted and skipped instead of reaching `probe`, where it used
+        to raise `SchemaDrift` and take every readable conversation with it.
+        """
+        good = {
+            "conversation_id": "conv-empty-neighbour",
+            "create_time": "2026-01-02T10:00:00.000Z",
+            "mapping": {
+                "root": {"children": ["a"], "message": None},
+                "a": {"parent": "root", "children": [], "message": None},
+            },
+        }
+        with tempfile.TemporaryDirectory() as d:
+            shard = Path(d) / "conversations-000.json"
+            shard.write_text(json.dumps([good, {}, good]), encoding="utf-8")
+            refs = chatgpt.sessions(Path(d))
+            self.assertEqual([r.session_id for r in refs], ["conv-empty-neighbour"])
+            for ref in refs:  # nothing readable in the root raises nothing
+                chatgpt.probe(ref)
+            diag = chatgpt.diagnostics()
+            self.assertEqual(diag["counts"]["empty_conversation_objects"], 1)
+            self.assertEqual(diag["counts"]["conversations_discovered"], 3)
+            self.assertEqual(diag["counts"]["duplicate_conversation_ids"], 1)
+
+    def test_an_object_with_keys_but_no_mapping_still_raises_drift(self):
+        """Drift stays loud where a conversation carries content and no tree."""
+        shaped = {"title": "not a conversation", "create_time": "2026-01-02"}
+        with tempfile.TemporaryDirectory() as d:
+            shard = Path(d) / "conversations-000.json"
+            shard.write_text(json.dumps([shaped]), encoding="utf-8")
+            refs = chatgpt.sessions(Path(d))
+            self.assertEqual(len(refs), 1)
+            with self.assertRaises(SchemaDrift):
+                chatgpt.probe(refs[0])
+
     def test_a_repeated_conversation_id_is_kept_once(self):
         """The second export of a conversation is counted, not emitted twice."""
         self.assertEqual(self.diag["counts"]["duplicate_conversation_ids"], 1)

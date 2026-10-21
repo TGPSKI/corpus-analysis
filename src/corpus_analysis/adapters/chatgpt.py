@@ -150,6 +150,7 @@ class _Span:
     end: int                # byte offset one past it
     conversation_id: str
     create_time: str
+    empty: bool = False      # a keyless object: nothing drifted, nothing readable
 
 
 #: Per-shard spans, and the winning span per conversation id. Both are derived
@@ -178,11 +179,12 @@ def _scan_shard(path: Path) -> list[_Span]:
     for span, conv in array_spans(path):
         cid = ""
         created = ""
+        empty = isinstance(conv, dict) and not conv
         if isinstance(conv, dict):
             cid = str(conv.get("conversation_id") or conv.get("id") or "")
             created = _iso(conv.get("create_time"))
         out.append(_Span(span.path, span.index, span.start, span.end,
-                         cid or f"{path.stem}:{span.index}", created))
+                         cid or f"{path.stem}:{span.index}", created, empty))
     return out
 
 
@@ -213,6 +215,13 @@ def sessions(root: Path | None = None, include_subagents: bool = True) -> list[S
     for shard in shards:
         for span in _shard_index(shard):
             _DIAG.counts["conversations_discovered"] += 1
+            # An object with no keys at all is not a reshape of the format:
+            # nothing drifted, there is simply nothing there. Skip it before
+            # it can reach `probe`, where a keyless object would read as drift
+            # and take every readable conversation in the root down with it.
+            if span.empty:
+                _DIAG.counts["empty_conversation_objects"] += 1
+                continue
             if span.conversation_id in _SPANS:
                 _DIAG.counts["duplicate_conversation_ids"] += 1
                 continue
