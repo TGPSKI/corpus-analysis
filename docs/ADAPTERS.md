@@ -14,7 +14,7 @@ copies of vendor transcripts.
 | Name | Source shape | Default root | Fixture coverage | Source-specific loss or caution |
 |---|---|---|---|---|
 | `claude` | Claude Code JSONL sessions and `subagents/agent-*.jsonl` | `~/.claude/projects` | `tests/fixtures/corpus/` | Parent and subagent sessions are separate records with parent attribution. Continuation summaries are harness-authored and do not count as typed prompts. |
-| `codex` | dated or flat `rollout-*.jsonl` | `~/.codex/sessions` | `tests/fixtures/codex/` | Cumulative usage is converted to per-turn deltas. A cumulative field must not be summed again downstream. |
+| `codex` | dated or flat `rollout-*.jsonl` | `~/.codex/sessions` | `tests/fixtures/codex/` | Cumulative usage is converted to per-turn deltas. A cumulative field must not be summed again downstream. Subagent rollouts (`session_meta.payload.source` an object) are flagged `sidechain` and their user messages are not operator-typed. |
 | `opencode` | SQLite `session`, `message`, and `part` tables | `~/.local/share/opencode/opencode.db` | built by `tests/test_adapters.py` at test time; no binary fixture is committed | Reads the database through a read-only connection. Child sessions are retained and linked to their parent. |
 | `chatgpt` | `conversations*.json` export shards containing conversation trees | `~/corpus/chatgpt` | `tests/fixtures/chatgpt/export-synthetic/` | Traverses the branch named by `current_node`; ambiguous branches emit diagnostics and no turns. Image and audio content is counted and dropped. |
 | `claude_export` | `conversations.json` export arrays | `~/corpus/claude` | `tests/fixtures/claude_export/export-synthetic/` | No active-branch pointer exists. Multiple tips, cycles, and unreachable components fail closed. Memories, projects, reflections, and account files are structural inputs, not turns. |
@@ -64,7 +64,10 @@ time window, and keep output under an ignored local directory. See
 Drift is an input failure, not a low-count result. Preserve the failing source
 and the adapter name, then inspect the vendor format before changing the
 adapter. `stats` may also report structural diagnostics such as ambiguous
-branches, duplicate ids, skipped media, or malformed records. Diagnostics are
+branches, duplicate ids, skipped media, or malformed records. An object with
+no keys at all (an empty `{}` in a conversation array) is not drift: the
+ChatGPT adapter counts it as `empty_conversation_objects` entries and reads the
+rest of the shard. Diagnostics are
 aggregate categories; they must not echo source values.
 
 The adapter boundary is also the downstream contract. A consumer such as

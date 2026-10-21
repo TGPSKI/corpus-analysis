@@ -1,6 +1,7 @@
 """Codex rollouts: `<root>/YYYY/MM/DD/rollout-<ts>-<session-id>.jsonl`.
 
-Two facts about this format drive the mapping.
+Two facts about this format drive the mapping, and a third attributes its
+sessions.
 
 **Usage is reported twice, and only one of them is per-turn.** A `token_count`
 event carries `total_token_usage`, which is cumulative over the session, and
@@ -8,6 +9,12 @@ event carries `total_token_usage`, which is cumulative over the session, and
 cumulative one multiplies a session's real spend by its turn count. `last` is
 used, with a delta of the cumulative figure as the fallback for releases that
 do not carry it.
+
+**A subagent rollout is a session the parent agent opened.** Its first
+`session_meta` carries `payload.source` as an object (`{"subagent": …}`)
+where operator sessions carry a string (`cli`, `vscode`). Its turns are
+flagged `sidechain`, and the messages the parent writes into it are never
+marked typed: the operator is not the one who typed them.
 
 **Reasoning text is withheld here too.** A `reasoning` item carries an empty
 `summary` and an `encrypted_content` blob, so depth is countable
@@ -86,6 +93,7 @@ def turns(ref: SessionRef) -> Iterator[Turn]:
     path = Path(ref.path)
     session_id = ref.session_id
     model = version = effort = cwd = ""
+    subagent = False
     cumulative = {"input_tokens": 0, "output_tokens": 0,
                   "cache_read_input_tokens": 0, "reasoning_output_tokens": 0}
 
@@ -99,6 +107,7 @@ def turns(ref: SessionRef) -> Iterator[Turn]:
             cwd = str(payload.get("cwd") or cwd)
             version = str(payload.get("cli_version") or version)
             model = str(payload.get("model") or model)
+            subagent = _is_subagent_source(payload.get("source"))
         elif rtype == "turn_context":
             model = str(payload.get("model") or model)
             effort = str(payload.get("model_reasoning_effort") or effort)
@@ -110,9 +119,13 @@ def turns(ref: SessionRef) -> Iterator[Turn]:
                        f"{session_id}:{i}", role, ptype or rtype)
         t["ts"] = str(rec.get("timestamp") or "")
         t["model"], t["version"], t["effort"], t["cwd"] = model, version, effort, cwd
+        # Same attribution the Claude Code adapter gives its sidechains: a
+        # session the parent agent opened writes its own turns, so every turn
+        # is flagged and no user message in it reads as operator-typed.
+        t["flags"]["sidechain"] = subagent
 
         if ptype == "user_message":
-            _user(payload, t)
+            _user(payload, t, subagent)
         elif ptype == "agent_message":
             _agent(payload, t)
         elif ptype == "token_count":
@@ -134,11 +147,25 @@ def turns(ref: SessionRef) -> Iterator[Turn]:
         yield Turn(**t)
 
 
-def _user(payload: dict, t: dict) -> None:
+def _is_subagent_source(source: object) -> bool:
+    """Whether `session_meta.payload.source` names a subagent session.
+
+    Operator sessions carry a string (`cli`, `vscode`); a session the parent
+    agent opened carries an object whose `subagent` key names it. A missing
+    `source` (older releases) or an unknown object shape stays an operator
+    session: attribution must not drift from one missing field to zero typed
+    prompts.
+    """
+    return isinstance(source, dict) and "subagent" in source
+
+
+def _user(payload: dict, t: dict, subagent: bool = False) -> None:
     text = str(payload.get("message") or "")
     t["kinds"]["text"] = 1
     t["chars"]["text"] = len(text)
-    if text.strip():
+    # In a subagent session the parent agent is the one writing these, so the
+    # text still counts as text and never as something the operator typed.
+    if text.strip() and not subagent:
         t["flags"]["typed"] = True
         t["text"] = bounded(text)
 
